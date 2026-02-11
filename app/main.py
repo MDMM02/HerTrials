@@ -1,20 +1,75 @@
-from fastapi import FastAPI, Depends, Body
+from fastapi import FastAPI, Depends, Body, Form, Request
 from sqlalchemy.orm import Session
 from .db import engine, Base, get_db
 from .models import Record
 from .services.pubmed import search_pubmed, fetch_pubmed_details
 import hashlib
 from .services.summarizer import summarize_text
+from fastapi.templating import Jinja2Templates
+from fastapi.responses import HTMLResponse, RedirectResponse
 
 app = FastAPI(title="HerTrials API")
+templates = Jinja2Templates(directory="app/templates")
 
 @app.on_event("startup")
 def startup():
     Base.metadata.create_all(bind=engine)
 
-@app.get("/")
-def root():
-    return {"status": "HerTrials backend running"}
+@app.get("/", response_class=HTMLResponse)
+def home(request: Request):
+    return templates.TemplateResponse(
+        "index.html",
+        {"request": request}
+    )
+
+@app.get("/records", response_class=HTMLResponse)
+def view_records(request: Request, db=Depends(get_db)):
+    records = db.query(Record).all()
+    return templates.TemplateResponse(
+        "records.html",
+        {"request": request, "records": records}
+    )
+
+@app.post("/search", response_class=HTMLResponse)
+def search(
+    request: Request,
+    query: str = Form(...),
+    db: Session = Depends(get_db)
+):
+    ingest_pubmed(topic=query, db=db)
+    records = (
+        db.query(Record)
+        .order_by(Record.created_at.desc())
+        .limit(5)
+        .all()
+    )
+    return templates.TemplateResponse(
+        "search.html",
+        {
+            "request": request,
+            "records": records,
+            "query": query
+        }
+    )
+
+@app.get("/search_last", response_class=HTMLResponse)
+def search_last(request: Request, db: Session = Depends(get_db)):
+
+    records = (
+        db.query(Record)
+        .order_by(Record.created_at.desc())
+        .limit(5)
+        .all()
+    )
+
+    return templates.TemplateResponse(
+        "search.html",
+        {
+            "request": request,
+            "records": records,
+            "query": "Latest results"
+        }
+    )
 
 
 @app.post("/ingest/pubmed")
@@ -58,8 +113,14 @@ def ingest_pubmed(
     return {"inserted": inserted}
 
 
-@app.post("/summarize/{record_id}")
-def summarize_record(record_id: str, db: Session = Depends(get_db)):
+
+@app.post("/summarize/{record_id}/{mode}")
+def summarize_record(
+    record_id: str,
+    mode: str,
+    db: Session = Depends(get_db)
+):
+
     record = db.query(Record).filter(Record.id == record_id).first()
 
     if not record:
@@ -68,18 +129,17 @@ def summarize_record(record_id: str, db: Session = Depends(get_db)):
     if not record.abstract:
         return {"error": "No abstract available"}
 
-    if record.summary_scientific:
-        return {
-            "message": "Summary already exists",
-            "summary": record.summary_scientific
-        }
+    summary = summarize_text(record.abstract, mode=mode)
 
-    summary = summarize_text(record.abstract)
+    if mode == "scientific":
+        record.summary_scientific = summary
 
-    record.summary_scientific = summary
+    elif mode == "layman":
+        record.summary_layman = summary
+
+    elif mode == "children":
+        record.summary_children = summary
+
     db.commit()
 
-    return {
-        "record_id": record_id,
-        "summary": summary
-    }
+    return RedirectResponse(url="/search_last", status_code=303)

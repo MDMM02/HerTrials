@@ -19,3 +19,5 @@ class Record(Base):
     topic = Column(String)
     summary_scientific = Column(Text)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
+    summary_layman = Column(Text, nullable=True)
+    summary_children = Column(Text, nullable=True)

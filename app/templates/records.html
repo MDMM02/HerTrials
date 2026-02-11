@@ -1,0 +1,19 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Trials</title>
+</head>
+<body>
+    <h1>Stored Trials</h1>
+
+    {% for record in records %}
+        <div style="margin-bottom:20px;">
+            <h3>{{ record.title }}</h3>
+            <p>{{ record.year }}</p>
+            <a href="/record/{{ record.id }}">View Details</a>
+        </div>
+    {% endfor %}
+
+    <a href="/">Back</a>
+</body>
+</html>
