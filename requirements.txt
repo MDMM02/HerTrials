@@ -1,0 +1,16 @@
+fastapi
+uvicorn
+sqlalchemy
+psycopg2-binary
+python-dotenv
+requests
+torch
+torchvision
+transformers
+sentencepiece
+accelerate
+numpy
+pandas
+scikit-learn
+umap-learn
+lxml
