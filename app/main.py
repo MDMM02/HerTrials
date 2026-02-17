@@ -113,33 +113,39 @@ def ingest_pubmed(
     return {"inserted": inserted}
 
 
+from fastapi import HTTPException
+from starlette.responses import RedirectResponse, JSONResponse
+
+ALLOWED_MODES = {"scientific", "layman", "children"}
 
 @app.post("/summarize/{record_id}/{mode}")
 def summarize_record(
     record_id: str,
     mode: str,
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
 ):
+    mode = mode.lower().strip()
+    if mode not in ALLOWED_MODES:
+        raise HTTPException(status_code=400, detail=f"Invalid mode. Use one of: {sorted(ALLOWED_MODES)}")
 
     record = db.query(Record).filter(Record.id == record_id).first()
-
     if not record:
-        return {"error": "Record not found"}
+        raise HTTPException(status_code=404, detail="Record not found")
 
-    if not record.abstract:
-        return {"error": "No abstract available"}
+    if not record.abstract or len(record.abstract.strip()) < 50:
+        # tu peux laisser 200 si tu préfères
+        return JSONResponse({"error": "No abstract available"}, status_code=200)
 
     summary = summarize_text(record.abstract, mode=mode)
 
     if mode == "scientific":
         record.summary_scientific = summary
-
     elif mode == "layman":
         record.summary_layman = summary
-
-    elif mode == "children":
+    else:  # children
         record.summary_children = summary
 
     db.commit()
 
+    # UX web: on revient sur la page
     return RedirectResponse(url="/search_last", status_code=303)
