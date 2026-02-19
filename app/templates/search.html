@@ -1,4 +1,4 @@
-<!DOCTYPE html>
+<!-- <!DOCTYPE html>
 <html lang="en">
 <head>
   <meta charset="UTF-8" />
@@ -112,4 +112,108 @@
     </div>
   </div>
 </body>
-</html>
+</html> -->
+<link rel="stylesheet" href="../static/styles.css">
+
+{% extends "base.html" %}
+{% block content %}
+<div class="bubbles"></div>
+<div class="container">
+
+  <div class="hero">
+    <h1 class="h1">Search</h1>
+    <p class="sub">Type a topic, fetch PubMed results, then generate summaries per article.</p>
+  </div>
+
+  <div class="grid">
+    <!-- LEFT: search + results -->
+    <div class="card card-pad">
+      <form method="post" action="/search">
+        <label class="small">Topic</label>
+        <div class="btn-row" style="margin-top:8px">
+          <input class="input" name="query" placeholder="e.g., endometriosis pain surgery" value="{{ last_query or '' }}" />
+          <button class="btn btn-primary" type="submit">Search</button>
+        </div>
+        <p class="small" style="margin-top:10px">Tip: Start broad, then refine keywords.</p>
+      </form>
+
+      {% if records and records|length > 0 %}
+        <div class="hr"></div>
+        <p class="small">{{ records|length }} result(s)</p>
+
+        <div style="display:flex; flex-direction:column; gap:14px; margin-top:10px">
+          {% for r in records %}
+            <div class="card card-pad" style="background: rgba(255,255,255,.03)">
+              <h3 class="article-title">{{ r.title }}</h3>
+
+              <p class="meta">
+                <span class="badge">Year: {{ r.year or "—" }}</span>
+                <span class="badge">Source: {{ r.source }}</span>
+                {% if r.external_id %}<span class="badge">PMID: {{ r.external_id }}</span>{% endif %}
+                {% if r.url %}<a class="badge" href="{{ r.url }}" target="_blank" rel="noreferrer">Open ↗</a>{% endif %}
+              </p>
+
+              {% if r.abstract %}
+                <p class="p">{{ r.abstract }}</p>
+              {% else %}
+                <p class="p" style="color:var(--muted)">No abstract available.</p>
+              {% endif %}
+
+              <div class="hr"></div>
+
+              <!-- Buttons -->
+              <div data-record="{{ r.id }}" class="btn-row">
+                <span class="badge ok" data-status>✅ Ready</span>
+
+                <button class="btn" type="button" data-mode="scientific">
+                  Generate Summary A (Scientific)
+                </button>
+
+                <button class="btn" type="button" data-mode="layman">
+                  Generate Summary B (Layman)
+                </button>
+
+                <button class="btn" type="button" data-mode="children">
+                  Generate Summary C (Children)
+                </button>
+              </div>
+
+              <!-- Output blocks -->
+              {% if r.summary_scientific %}
+                <div class="hr"></div>
+                <span class="badge ok">Scientific Summary</span>
+                <p class="p" style="margin-top:8px">{{ r.summary_scientific }}</p>
+              {% endif %}
+
+              {% if r.summary_layman %}
+                <div class="hr"></div>
+                <span class="badge ok">Layman Summary</span>
+                <p class="p" style="margin-top:8px">{{ r.summary_layman }}</p>
+              {% endif %}
+
+              {% if r.summary_children %}
+                <div class="hr"></div>
+                <span class="badge ok">Children Summary</span>
+                <p class="p" style="margin-top:8px">{{ r.summary_children }}</p>
+              {% endif %}
+            </div>
+          {% endfor %}
+        </div>
+      {% endif %}
+    </div>
+
+    <!-- RIGHT: helper panel -->
+    <div class="card card-pad">
+      <h3 class="article-title">How it works</h3>
+      <p class="p" style="color:var(--muted)">
+        Search pulls PubMed entries into your database. Summaries are generated on demand and saved.
+      </p>
+      <div class="hr"></div>
+      <p class="small">A = scientific (compact, accurate)</p>
+      <p class="small">B = plain language (no acronyms, no numbers)</p>
+      <p class="small">C = children-friendly (very simple)</p>
+    </div>
+  </div>
+
+{% endblock %}
+</div>

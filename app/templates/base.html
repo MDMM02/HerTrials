@@ -1,0 +1,32 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>{{ title or "HerTrials" }}</title>
+  <link rel="stylesheet" href="../static/styles.css" />
+</head>
+<body>
+  <div class="nav">
+    <div class="nav-inner">
+      <a class="brand" href="/">
+        <span class="brand-badge"></span>
+        <span>HerTrials</span>
+      </a>
+      <div class="nav-links">
+        <a href="/">Home</a>
+        <a href="/search">Search</a>
+        <a href="/records">Records</a>
+        <a href="/docs" target="_blank" rel="noreferrer">API</a>
+      </div>
+    </div>
+  </div>
+
+  <main class="container">
+    {% block content %}{% endblock %}
+  </main>
+
+  <div id="toast" class="toast"></div>
+  <script src="../static/app.js"></script>
+</body>
+</html>

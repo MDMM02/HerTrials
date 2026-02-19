@@ -1,15 +1,16 @@
-<!DOCTYPE html>
-<html>
-<head>
-    <title>HerTrials</title>
-</head>
-<body>
-    <h1>HerTrials</h1>
-    <form action="/search" method="post">
-        <input type="text" name="query" placeholder="Search topic..." required>
-        <button type="submit">Search</button>
-    </form>
+<link rel="stylesheet" href="../static/styles.css">
+{% extends "base.html" %}
+{% block content %}
+  <div class="hero">
+    <h1 class="h1">Search PubMed, save results, generate summaries.</h1>
+    <p class="sub">Generate three summaries on demand: scientific, plain language, and children-friendly — stored in your database.</p>
+  </div>
 
-    <a href="/records">View Stored Trials</a>
-</body>
-</html>
+  <div class="card card-pad">
+    <div class="btn-row">
+      <a class="btn btn-primary" href="/search">Go to Search</a>
+      <a class="btn" href="/records">View saved Records</a>
+      <a class="btn" href="/docs" target="_blank" rel="noreferrer">Open API docs</a>
+    </div>
+  </div>
+{% endblock %}

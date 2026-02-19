@@ -1,133 +1,181 @@
+# app/services/summarizer.py
+
+import os
 import re
-import torch
-from transformers import (
-    AutoTokenizer,
-    AutoModelForSeq2SeqLM,
-)
+from typing import Literal, Optional
 
-# --- Models ---
-PEGASUS_MODEL = "google/pegasus-pubmed"          # summarization (biomed)
-REWRITE_MODEL = "google/flan-t5-small"           # rewriting (CPU-friendly)
+import ollama
 
-device = torch.device("cpu")
+Mode = Literal["scientific", "layman", "children"]
 
-_pegasus_tokenizer = None
-_pegasus_model = None
+# Choose your local Ollama model (must be pulled already)
+# Examples: "mistral", "llama3.1:8b", "qwen2.5:7b-instruct"
+OLLAMA_MODEL = os.getenv("OLLAMA_MODEL", "mistral")
 
-_rewrite_tokenizer = None
-_rewrite_model = None
+# If your Ollama server is not on default host/port, set:
+#   setx OLLAMA_HOST "http://127.0.0.1:11434"
+# or in PowerShell:
+#   $env:OLLAMA_HOST="http://127.0.0.1:11434"
+OLLAMA_HOST = os.getenv("OLLAMA_HOST", "http://127.0.0.1:11434")
 
 
-def _lazy_load_pegasus():
-    global _pegasus_tokenizer, _pegasus_model
-    if _pegasus_tokenizer is None or _pegasus_model is None:
-        print("Loading Pegasus PubMed model...")
-        _pegasus_tokenizer = AutoTokenizer.from_pretrained(PEGASUS_MODEL, use_fast=False)
-        _pegasus_model = AutoModelForSeq2SeqLM.from_pretrained(PEGASUS_MODEL).to(device)
-        _pegasus_model.eval()
-        print("Pegasus loaded successfully.")
-
-
-def _lazy_load_rewriter():
-    global _rewrite_tokenizer, _rewrite_model
-    if _rewrite_tokenizer is None or _rewrite_model is None:
-        print("Loading rewrite model (Flan-T5)...")
-        _rewrite_tokenizer = AutoTokenizer.from_pretrained(REWRITE_MODEL, use_fast=True)
-        _rewrite_model = AutoModelForSeq2SeqLM.from_pretrained(REWRITE_MODEL).to(device)
-        _rewrite_model.eval()
-        print("Rewrite model loaded successfully.")
-
-
-def clean_text(text: str) -> str:
+def _clean_input(text: str) -> str:
+    """Cleans raw abstract text before sending to LLM."""
     if not text:
         return ""
-    text = text.replace("<n>", " ")
-    text = re.sub(r"\s+", " ", text)
-    text = re.sub(r"\s([?.!,;:])", r"\1", text)
-    return text.strip()
+    t = text
+
+    # Common artifacts
+    t = t.replace("<n>", " ").replace("</n>", " ")
+    t = t.replace("\u00a0", " ")  # non-breaking space
+    t = re.sub(r"\s+", " ", t).strip()
+
+    # If abstract contains weird separators, normalize lightly
+    t = t.replace("Objectives", "Objectives: ")
+    t = t.replace("Methods", "Methods: ")
+    t = t.replace("Results", "Results: ")
+    t = t.replace("Conclusions", "Conclusions: ")
+    return t
 
 
-def _pegasus_summarize(text: str) -> str:
-    _lazy_load_pegasus()
+def _post_clean_output(text: str, mode: Mode) -> str:
+    """Extra safety net to enforce constraints for layman/children."""
+    if not text:
+        return text
 
-    base = clean_text(text)
-    inputs = _pegasus_tokenizer(
-        base,
-        truncation=True,
-        padding="longest",
-        max_length=1024,
-        return_tensors="pt",
+    t = text.strip()
+
+    # Remove any remaining <n> artifacts
+    t = t.replace("<n>", " ").replace("</n>", " ")
+
+    if mode in ("layman", "children"):
+        # Remove bracket/parenthesis content (often acronyms/doses)
+        t = re.sub(r"\([^)]*\)", "", t)
+        t = re.sub(r"\[[^\]]*\]", "", t)
+
+        # Remove acronyms (2+ uppercase letters)
+        t = re.sub(r"\b[A-Z]{2,}\b", "", t)
+
+        # Remove numbers, percentages, dose schedules, units
+        t = re.sub(r"\b\d+(\.\d+)?\b", "", t)
+        t = re.sub(r"\b\d+(\.\d+)?%\b", "", t)
+        t = re.sub(r"\b(μg|ug|mg|g|kg|ml|mL|h|hr|day|days|week|weeks|month|months)\b", "", t, flags=re.IGNORECASE)
+        t = re.sub(r"\b\d+(\.\d+)?\s*/\s*\d+(\.\d+)?\b", "", t)  # like 28/43
+
+        # Remove trial-design jargon if it slipped in
+        banned = [
+            "randomized", "placebo", "endpoint", "phase", "single-arm", "prospective",
+            "double-blind", "open-label", "simon", "two-stage", "confidence interval",
+            "statistically significant", "p value", "p-value", "odds ratio"
+        ]
+        pattern = r"\b(" + "|".join(re.escape(w) for w in banned) + r")\b"
+        t = re.sub(pattern, "", t, flags=re.IGNORECASE)
+
+        # Normalize spaces/punctuation
+        t = re.sub(r"\s+", " ", t).strip()
+        t = re.sub(r"\s+([,.;:!?])", r"\1", t)
+        t = re.sub(r"\.{2,}", ".", t)
+
+    return t.strip()
+
+
+def _ollama_chat(system: str, user: str, max_tokens: int, temperature: float) -> str:
+    """
+    Calls Ollama local server.
+    """
+    # The python package uses OLLAMA_HOST env var; we set it to be safe.
+    os.environ["OLLAMA_HOST"] = OLLAMA_HOST
+
+    resp = ollama.chat(
+        model=OLLAMA_MODEL,
+        messages=[
+            {"role": "system", "content": system},
+            {"role": "user", "content": user},
+        ],
+        options={
+            "temperature": temperature,
+            "num_predict": max_tokens,
+        },
     )
-
-    with torch.no_grad():
-        summary_ids = _pegasus_model.generate(
-            **{k: v.to(device) for k, v in inputs.items()},
-            max_length=200,
-            min_length=50,
-            num_beams=4,
-            length_penalty=2.0,
-            early_stopping=True,
-        )
-
-    out = _pegasus_tokenizer.decode(summary_ids[0], skip_special_tokens=True)
-    return clean_text(out)
+    return (resp.get("message", {}) or {}).get("content", "").strip()
 
 
-def _rewrite(text: str, mode: str) -> str:
-    _lazy_load_rewriter()
-
-    base = clean_text(text)
-
-    if mode == "layman":
-        prompt = (
-            "Rewrite the following scientific summary for a general audience. "
-            "Use simple words, short sentences, avoid jargon, keep it accurate:\n\n"
-            f"{base}"
-        )
-        max_len = 220
-    elif mode == "children":
-        prompt = (
-            "Explain the following in a way a 10-year-old can understand. "
-            "Very simple words, short sentences, friendly tone. No jargon:\n\n"
-            f"{base}"
-        )
-        max_len = 180
-    else:
-        return base
-
-    inputs = _rewrite_tokenizer(
-        prompt,
-        truncation=True,
-        padding="longest",
-        max_length=512,
-        return_tensors="pt",
-    )
-
-    with torch.no_grad():
-        out_ids = _rewrite_model.generate(
-            **{k: v.to(device) for k, v in inputs.items()},
-            max_length=max_len,
-            min_length=60 if mode == "layman" else 40,
-            num_beams=4,
-            length_penalty=1.0,
-            early_stopping=True,
-        )
-
-    out = _rewrite_tokenizer.decode(out_ids[0], skip_special_tokens=True)
-    return clean_text(out)
-
-
-def summarize_text(text: str, mode: str = "scientific") -> str:
-    if not text or len(text.strip()) < 50:
+def summarize_text(text: str, mode: Mode = "scientific") -> str:
+    """
+    Summarize an abstract using a local Ollama LLM with strict instructions.
+    Modes:
+      - scientific: concise scientific summary (keeps key facts, can keep some numbers)
+      - layman: no acronyms, no numbers, no trial-design jargon, simple language
+      - children: very simple, kid-friendly, no numbers/jargon
+    """
+    raw = _clean_input(text)
+    if not raw or len(raw) < 30:
         return "No abstract available."
 
-    # Always start from a solid scientific summary
-    scientific = _pegasus_summarize(text)
+    mode = (mode or "scientific").lower().strip()  # type: ignore
+    if mode not in ("scientific", "layman", "children"):
+        mode = "scientific"
 
     if mode == "scientific":
-        return scientific
-    if mode in ("layman", "children"):
-        return _rewrite(scientific, mode)
+        system = (
+            "You are a biomedical researcher. Write a faithful, concise scientific summary of the abstract.\n"
+            "Rules:\n"
+            "- 4 to 6 sentences.\n"
+            "- Keep the study question, who was studied, what was tested, and the main result.\n"
+            "- Keep only the most important numbers (at most 2), but do not list dose schedules.\n"
+            "- Do not invent details.\n"
+        )
+        user = f"Abstract:\n{raw}\n\nWrite the summary now."
+        out = _ollama_chat(system, user, max_tokens=220, temperature=0.2)
+        return _post_clean_output(out, "scientific")
 
-    # fallback
-    return scientific
+    if mode == "layman":
+        system = (
+            "You explain medical research to the general public.\n"
+            "Rules (must follow all):\n"
+            "- No acronyms at all. If an acronym appears, remove it and spell the idea in plain words.\n"
+            "- No numbers, no percentages, no dose schedules.\n"
+            "- Do not mention trial design terms (no phase, randomized, placebo, endpoint, etc.).\n"
+            "- Use simple words and short sentences.\n"
+            "- 3 to 5 sentences.\n"
+            "- Focus on: what problem, what was tried, what happened, what it could mean.\n"
+            "- Do not invent details.\n"
+        )
+        user = f"Abstract:\n{raw}\n\nWrite the layman summary now."
+        out = _ollama_chat(system, user, max_tokens=180, temperature=0.3)
+        out = _post_clean_output(out, "layman")
+
+        # If model outputs something too short/empty after cleaning, ask for a safer re-try
+        if len(out) < 30:
+            user_retry = (
+                f"Abstract:\n{raw}\n\n"
+                "Rewrite again in very simple everyday language. No acronyms. No numbers. 3 to 5 sentences."
+            )
+            out = _ollama_chat(system, user_retry, max_tokens=200, temperature=0.25)
+            out = _post_clean_output(out, "layman")
+
+        return out
+
+    # children
+    system = (
+        "You explain medical research to an 8–10 year old.\n"
+        "Rules (must follow all):\n"
+        "- Very simple words.\n"
+        "- No acronyms, no numbers.\n"
+        "- 3 to 4 short sentences.\n"
+        "- Explain: what was the health problem, what doctors tried, what they found, what happens next.\n"
+        "- Do not invent details.\n"
+    )
+    user = f"Abstract:\n{raw}\n\nWrite the children summary now."
+    out = _ollama_chat(system, user, max_tokens=140, temperature=0.4)
+    out = _post_clean_output(out, "children")
+
+    if len(out) < 20:
+        user_retry = (
+            f"Abstract:\n{raw}\n\n"
+            "Try again: 3 short sentences. Very simple words. No acronyms. No numbers."
+        )
+        out = _ollama_chat(system, user_retry, max_tokens=160, temperature=0.35)
+        out = _post_clean_output(out, "children")
+
+    return out
